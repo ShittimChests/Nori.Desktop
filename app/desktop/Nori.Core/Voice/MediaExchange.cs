@@ -57,6 +57,7 @@ public sealed class MediaExchange
 	{
 		data = [];
 		mime = "application/octet-stream";
+		Prune();
 		if (!_downloads.TryRemove(token, out Entry? entry)) return false;
 		if (entry.ExpiresAt < DateTimeOffset.UtcNow) return false;
 		data = entry.Audio.Bytes;
@@ -76,6 +77,7 @@ public sealed class MediaExchange
 	/// <summary>完成一次带 MIME 的录音上传；token 无效或内容无效返回 false。</summary>
 	public bool TryCompleteUpload(string token, RecordedAudio audio)
 	{
+		Prune();
 		if (!_uploads.TryGetValue(token, out Upload? upload)) return false;
 		if (upload.ExpiresAt < DateTimeOffset.UtcNow)
 		{
@@ -143,7 +145,13 @@ public sealed class MediaExchange
 	public async Task<byte[]> WaitForUploadAsync(string token, TimeSpan timeout, CancellationToken cancellationToken = default) =>
 		(await WaitForRecordedUploadAsync(token, timeout, cancellationToken)).Bytes;
 
-	/// <summary>清理过期条目。</summary>
+	/// <summary>
+	/// 清理过期条目。
+	///
+	/// 发票、取音频、完成上传这几条路径都会顺手清一次: 只在 Publish 时清的话,
+	/// 一段没人下载的 TTS 音频 (最大 32MiB) 会一直占着内存到下一次登记为止。
+	/// 这里不另起定时器 —— 交换所由 AssetServer 或调用方持有, 没有统一的释放点。
+	/// </summary>
 	private void Prune()
 	{
 		DateTimeOffset now = DateTimeOffset.UtcNow;

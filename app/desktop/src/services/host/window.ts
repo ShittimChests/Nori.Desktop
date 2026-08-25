@@ -56,6 +56,9 @@ const metricsOf = (label: string): Metrics => {
 }
 
 // 宿主推送的窗口度量变更
+//
+// 有意不保留 unlisten: 这是模块级单例订阅, 生命周期等于页面本身,
+// 窗口关闭时整个 WebView 一起销毁, 没有可以注销的时机, 也不会随组件增长。
 void listen<{label: string; x: number; y: number; width: number; height: number; scaleFactor: number}>(
 	"nori:window-metrics",
 	({payload}) => {

@@ -116,11 +116,14 @@ const handleListScroll = () => {
 
 // 流式输出期间合并滚动调度; 用户翻到上面时只累计未读, 不硬拽视口
 let scrollPending = false
+// 卸载时要取消: 待执行的回调会摸 listRef, 组件已经拆了就没意义
+let scrollFrame = 0
 const scheduleScrollToBottom = () => {
 	if (isScrolledUp.value) return
 	if (scrollPending) return
 	scrollPending = true
-	requestAnimationFrame(() => {
+	scrollFrame = requestAnimationFrame(() => {
+		scrollFrame = 0
 		scrollPending = false
 		void scrollToBottom(false)
 	})
@@ -206,11 +209,14 @@ const loadOlderHistory = async () => {
 }
 
 // 复制单条消息内容
+let copiedResetTimer: ReturnType<typeof setTimeout> | null = null
 const copyMessage = async (key: string, content: string) => {
 	try {
 		await RUNTIME.copyText(content)
 		copiedBubbleKey.value = key
-		setTimeout(() => {
+		if (copiedResetTimer) clearTimeout(copiedResetTimer)
+		copiedResetTimer = setTimeout(() => {
+			copiedResetTimer = null
 			if (copiedBubbleKey.value === key) copiedBubbleKey.value = null
 		}, 1500)
 	} catch (error) {
@@ -249,6 +255,10 @@ onBeforeUnmount(() => {
 	CHAT.dispose()
 	unlistenAgent?.()
 	unlistenAgent = null
+	if (scrollFrame) cancelAnimationFrame(scrollFrame)
+	scrollFrame = 0
+	if (copiedResetTimer) clearTimeout(copiedResetTimer)
+	copiedResetTimer = null
 })
 
 // 发送消息
@@ -315,7 +325,17 @@ const stopRecordTimer = () => {
 	recordSeconds.value = 0
 }
 
-onBeforeUnmount(stopRecordTimer)
+onBeforeUnmount(() => {
+	stopRecordTimer()
+	// 组件在录音中被卸载时, 后端仍在等这一次录音的结果, 麦克风也没释放。
+	// 结果没人接收了, 所以只停不用, 失败也无所谓 (宿主可能正在退出)。
+	if (voiceState.value === "recording") {
+		voiceState.value = "idle"
+		void RUNTIME.sttStop().catch(() => {
+			/* 卸载路径上无处反馈, 忽略 */
+		})
+	}
+})
 
 const recordLabel = computed(() => {
 	const MINUTES = Math.floor(recordSeconds.value / 60).toString().padStart(2, "0")

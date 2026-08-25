@@ -45,6 +45,9 @@ public sealed class PetWindow : Window
 	private ContextMenu? _contextMenu;
 	/// <summary>上一次推给系统的穿透状态, 避免重复调用</summary>
 	private bool? _lastClickThrough;
+	/// <summary>PetRuntime 事件的处理器引用, 关闭时按同一引用摘掉</summary>
+	private readonly Action _onRuntimeModelChanged;
+	private readonly Action _onRuntimeLayoutChanged;
 
 	// 拖拽状态
 	private bool _isDragPending;
@@ -95,8 +98,10 @@ public sealed class PetWindow : Window
 		PointerReleased += OnPointerReleased;
 		PointerCaptureLost += (_, _) => FinishDrag();
 
-		_runtime.ModelChanged += () => Dispatcher.UIThread.Post(ApplyWindowSize);
-		_runtime.LayoutChanged += () => Dispatcher.UIThread.Post(ApplyWindowSize);
+		_onRuntimeModelChanged = () => Dispatcher.UIThread.Post(ApplyWindowSize);
+		_onRuntimeLayoutChanged = () => Dispatcher.UIThread.Post(ApplyWindowSize);
+		_runtime.ModelChanged += _onRuntimeModelChanged;
+		_runtime.LayoutChanged += _onRuntimeLayoutChanged;
 
 		_cursorTrackingTimer = new DispatcherTimer
 		{
@@ -235,6 +240,8 @@ public sealed class PetWindow : Window
 		_speechOverlay.ClearText();
 		_cursorTrackingTimer.Stop();
 		_hitShapeTimer?.Stop();
+		_runtime.ModelChanged -= _onRuntimeModelChanged;
+		_runtime.LayoutChanged -= _onRuntimeLayoutChanged;
 		if (OperatingSystem.IsWindows())
 		{
 			Win32Properties.RemoveWndProcHookCallback(this, _wndProcHook);

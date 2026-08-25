@@ -17,3 +17,4 @@ node_modules/
 app/desktop/dist/
 app/desktop/bin/
 .rpiv/
+REVIEW.md

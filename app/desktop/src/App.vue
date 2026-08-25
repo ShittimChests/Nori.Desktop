@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed, onMounted, ref} from "vue"
+import {computed, onBeforeUnmount, onMounted, ref} from "vue"
 import {useRouter} from "vue-router"
 import {getCurrentWindowLabel, navigateToOwnWindow} from "./services/window"
 import {RUNTIME} from "./services/runtime"
@@ -61,9 +61,13 @@ onMounted(async () => {
 })
 
 // 语言在任何窗口被改都会广播 state-changed, 这里跟随快照重放, 避免多窗口语言不一致
-RUNTIME.onLanguageChanged((language) => {
+// 注销句柄必须留着: 根组件在生产里不会卸载, 但开发态 HMR 每次重载都会重新 setup,
+// 不注销的话旧处理器会一直留在 languageHandlers 里被重复调用。
+const STOP_LANGUAGE_WATCH = RUNTIME.onLanguageChanged((language) => {
 	void useLanguage.setLanguage(language)
 })
+
+onBeforeUnmount(STOP_LANGUAGE_WATCH)
 </script>
 
 <template>

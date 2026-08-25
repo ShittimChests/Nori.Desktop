@@ -149,6 +149,7 @@ const startBootstrap = (): Promise<void> => {
 	BOOTSTRAP_ERROR.value = null
 	const RUN = (async () => {
 		await refresh()
+		// 订阅活到页面结束; 句柄只用于 retryInit 重建, 不需要 (也没有) 卸载时机
 		bootstrapUnlisten = await listen<{version: number; topics: string[]}>("nori:state-changed", () => {
 			void refresh().catch(error => {
 				// 广播刷新不能产生未处理拒绝, 同时必须让用户知道状态可能已过期。
