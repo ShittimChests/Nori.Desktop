@@ -105,9 +105,13 @@ public sealed class WindowManager(AssetServer assetServer, IClassicDesktopStyleA
 
 	/// <summary>
 	/// 显示并聚焦窗口
+	///
+	/// 退出已经开始时直接忽略: 窗口此刻正在或已经被销毁, 而 Avalonia 不允许重新显示已关闭的
+	/// 窗口 (抛 InvalidOperationException)。托盘、桥接命令和第二实例激活都可能比退出慢一步。
 	/// </summary>
 	public void Show(string label)
 	{
+		if (Volatile.Read(ref _shutdownRequested) != 0) return;
 		if (Get(label) is not { } window) return;
 		window.Show();
 		window.Activate();
