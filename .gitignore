@@ -1,6 +1,11 @@
 .reasonix
 .codegraph/
 .idea/
+.pi/
+.claude/
+.codex/
+.commandcode/
+.qoder/
 bin/
 obj/
 publish/
