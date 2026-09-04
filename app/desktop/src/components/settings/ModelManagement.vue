@@ -542,9 +542,15 @@ onBeforeUnmount(() => {
 						</div>
 					</div>
 
+					<!--
+						控制卡按内容高度堆叠, 由本容器负责滚动。
+						每张卡都必须 shrink-0: flex 列的子项默认 shrink 为 1, 卡片会被压到容器高度以内,
+						而 AppCard 根元素自带 overflow-hidden —— 于是"表情"以下的元素被直接裁掉且点不到,
+						容器也因为没有溢出而永远不出滚动条。表情多的模型 (arg-nori) 裁得最狠。
+					-->
 					<div class="flex-1 min-w-0 flex flex-col gap-3.5 scroll-area">
 						<!-- 标签页 1: 基础显示 + 桌宠行为 (两组各自成卡) -->
-						<AppCard v-show="adjustTab === 'display'">
+						<AppCard v-show="adjustTab === 'display'" class="shrink-0">
 							<AdjustControls
 								:model-id="adjustFor"
 								:model-name="modelNameOf(adjustFor)"
@@ -555,12 +561,12 @@ onBeforeUnmount(() => {
 								@expressions="onPreviewExpressions"
 							/>
 						</AppCard>
-						<AppCard v-show="adjustTab === 'display'">
+						<AppCard v-show="adjustTab === 'display'" class="shrink-0">
 							<Live2dBehaviorControls :model-id="adjustFor"/>
 						</AppCard>
 
 						<!-- 标签页 2: 自定义互动区域 -->
-						<AppCard v-show="adjustTab === 'interactions'">
+						<AppCard v-show="adjustTab === 'interactions'" class="shrink-0">
 							<InteractionControls
 								:model-id="adjustFor"
 								:regions="interactionsConfig.regions"

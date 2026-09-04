@@ -17,6 +17,9 @@ namespace Nori.Desktop.Tray;
 /// </summary>
 public static class TrayMenu
 {
+	/// <summary>已安装的托盘图标; 退出序列里要立刻摘掉, 见 <see cref="Remove"/></summary>
+	private static TrayIcon? _installed;
+
 	/// <summary>
 	/// 挂上托盘图标与菜单
 	/// </summary>
@@ -73,7 +76,31 @@ public static class TrayMenu
 			return false;
 		}
 		services.Logger.Write(LogSource.Backend, "info", "托盘菜单初始化完成");
+		_installed = tray;
 		return true;
+	}
+
+	/// <summary>
+	/// 摘掉托盘图标
+	///
+	/// 退出序列的第一步, 由 <c>desktop.Exit</c> 调用。托盘是进程级的常驻入口, 而退出清理会
+	/// 同步占住 UI 线程数秒 —— 不主动摘掉的话这段时间里点击照旧派发到上面的处理器, 对已经
+	/// 销毁的窗口调 Show()。幂等: 重复调用与未安装时都直接返回。
+	/// </summary>
+	public static void Remove()
+	{
+		if (_installed is not { } tray) return;
+		_installed = null;
+		try
+		{
+			// 先隐藏: 这一步立刻让图标从通知区消失, 不必等 Avalonia 走完自己的清理
+			tray.IsVisible = false;
+			if (Application.Current is { } application) TrayIcon.SetIcons(application, []);
+		}
+		catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException)
+		{
+			// 退出路径上没有上报渠道; 图标最迟随进程结束由系统回收
+		}
 	}
 
 	private static bool CanShowPet(AppServices services)

@@ -49,6 +49,10 @@ public sealed class App : Application
 			CrashReporter.Register(desktop); // UI 线程与任务级异常兜底
 			desktop.Exit += (_, _) =>
 			{
+				// 第一件事就是摘掉托盘图标: 下面的等待会同步占住 UI 线程最多 8s, 而 Avalonia
+				// 要到进程真正结束才回收托盘 —— 这几秒里图标照旧能点, 点一下就是对已经销毁的
+				// 窗口调 Show(), 抛 InvalidOperationException 并弹出一个渲染栈已拆掉的空白崩溃窗。
+				TrayMenu.Remove();
 				_shutdownCts.Cancel();
 				if (Interlocked.CompareExchange(ref _shutdownStarted, 1, 0) == 0)
 					_shutdownTask = ShutdownAsync();
@@ -280,6 +284,16 @@ public sealed class App : Application
 		Interlocked.Exchange(ref _secondInstanceActivationPending, 1);
 	}
 
+	/// <summary>
+	/// 退出清理
+	///
+	/// 有意不释放 _shutdownCts: 它的 Token 被交给 AppServices.ShutdownToken 全局共享,
+	/// NoriBridge 还在它上面挂了 CreateLinkedTokenSource (等于一条注册)。这里的等待是
+	/// WhenAny —— 后台任务收尾最坏要 10s, 超过 8s 预算时 cleanup 仍在运行, 此刻释放会让
+	/// 之后任何 linked source 的建立或注销抛 ObjectDisposedException, 经 CrashReporter
+	/// 变成退出瞬间的崩溃弹窗 (实测: 启动 1s 内托盘退出即可复现)。
+	/// 换来的只是几个托管注册项 —— 进程随后就结束, 由 OS 回收, 不值得这个风险。
+	/// </summary>
 	private async Task ShutdownAsync()
 	{
 		Task cleanup = ShutdownCoreAsync();

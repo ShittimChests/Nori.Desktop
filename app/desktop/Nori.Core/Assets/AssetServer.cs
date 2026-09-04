@@ -47,6 +47,13 @@ public sealed class AssetServer : IAsyncDisposable
 
 	private readonly WebApplication _app;
 	private readonly AssetServerOptions _options;
+	/// <summary>
+	/// 静态文件提供器
+	///
+	/// PhysicalFileProvider 内部带一个 FileSystemWatcher (变更令牌用), 不释放的话
+	/// 目录句柄与监视线程会一直留到进程结束。中间件只在请求期间用它, 所以随服务一起释放。
+	/// </summary>
+	private readonly IReadOnlyList<IDisposable> _fileProviders;
 
 	public string Prefix { get; }
 
@@ -62,10 +69,11 @@ public sealed class AssetServer : IAsyncDisposable
 		? $"/{MediaSegment}/{token}"
 		: $"{Origin}{Prefix}/{MediaSegment}/{token}";
 
-	private AssetServer(WebApplication app, AssetServerOptions options, string prefix, string origin, Nori.Core.Voice.MediaExchange media)
+	private AssetServer(WebApplication app, AssetServerOptions options, string prefix, string origin, Nori.Core.Voice.MediaExchange media, IReadOnlyList<IDisposable> fileProviders)
 	{
 		_app = app;
 		_options = options;
+		_fileProviders = fileProviders;
 		Prefix = prefix;
 		Origin = origin;
 		Media = media;
@@ -280,7 +288,7 @@ public sealed class AssetServer : IAsyncDisposable
 		string origin = app.Urls.FirstOrDefault(url => url.StartsWith("http://", StringComparison.Ordinal))
 			?? throw new InvalidOperationException("资源服务未能绑定到回环地址");
 		origin = origin.Replace("//localhost:", "//127.0.0.1:", StringComparison.Ordinal).TrimEnd('/');
-		return new AssetServer(app, options, prefix, origin, media);
+		return new AssetServer(app, options, prefix, origin, media, [appProvider, resourceProvider]);
 	}
 
 	private static async Task<byte[]?> ReadCappedBodyAsync(Stream body, CancellationToken cancellationToken)
@@ -314,5 +322,17 @@ public sealed class AssetServer : IAsyncDisposable
 	{
 		await _app.StopAsync();
 		await _app.DisposeAsync();
+		// 服务停掉之后再释放提供器, 确保没有请求还在读它们
+		foreach (IDisposable provider in _fileProviders)
+		{
+			try
+			{
+				provider.Dispose();
+			}
+			catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+			{
+				// 退出路径上的清理失败无处上报
+			}
+		}
 	}
 }

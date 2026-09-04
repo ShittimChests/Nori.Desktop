@@ -63,6 +63,15 @@ public sealed class AppRuntime : IAsyncDisposable
 	private bool _petInteractionSubscribed;
 	private int _disposed;
 
+	// 服务事件的处理器引用: 释放时按同一引用摘掉, 避免 Dispose 之后回调仍打到已释放的运行时上
+	private readonly Action<string, bool>? _onWindowVisibilityChanged;
+	private Action<string>? _onExpressionRequested;
+	private Action<ProactiveMessage>? _onProactiveMessage;
+	private Action<double>? _onPlaybackVolumeSampled;
+	private Action<bool>? _onPlaybackPlayingChanged;
+	private Action<bool>? _onVoiceSpeakingChanged;
+	private Action<double>? _onVoiceVolumeChanged;
+
 	public AppServices Services { get; }
 
 	public ToolRegistry Tools { get; }
@@ -171,7 +180,7 @@ public sealed class AppRuntime : IAsyncDisposable
 		// 窗口显隐变化 (含托盘切换桌宠) 直接作废快照, 主界面的桌宠状态因此不会陈旧
 		if (services.Windows is not null)
 		{
-			services.Windows.VisibilityChanged += (label, visible) =>
+			_onWindowVisibilityChanged = (label, visible) =>
 			{
 				if (label == WindowLabels.Pet && !visible)
 				{
@@ -180,6 +189,7 @@ public sealed class AppRuntime : IAsyncDisposable
 				}
 				InvalidateSnapshot(label == WindowLabels.Pet ? "pet" : "windows");
 			};
+			services.Windows.VisibilityChanged += _onWindowVisibilityChanged;
 		}
 	}
 
@@ -201,7 +211,7 @@ public sealed class AppRuntime : IAsyncDisposable
 			Services.PetRuntime.ModelLoadFailed += OnPetModelStateChanged;
 			_petInteractionSubscribed = true;
 		}
-		Emotion.ExpressionRequested += expression =>
+		_onExpressionRequested = expression =>
 		{
 			try
 			{
@@ -212,6 +222,7 @@ public sealed class AppRuntime : IAsyncDisposable
 				/* 表情未匹配时忽略 */
 			}
 		};
+		Emotion.ExpressionRequested += _onExpressionRequested;
 
 		// 回放持久化的工具禁用清单
 		if (Services.Config.Get("tools_disabled") is ConfigValue.Json {Value: JsonNode node})
@@ -229,7 +240,8 @@ public sealed class AppRuntime : IAsyncDisposable
 
 		if (!Services.SafeMode)
 		{
-			Proactive.Message += message => Dispatcher.UIThread.Post(() => OnProactiveMessage(message));
+			_onProactiveMessage = message => Dispatcher.UIThread.Post(() => OnProactiveMessage(message));
+			Proactive.Message += _onProactiveMessage;
 			Proactive.Start();
 
 			// Knowledge 和 Reflection 都在后台启动；索引或整理失败不能阻塞聊天。
@@ -241,7 +253,7 @@ public sealed class AppRuntime : IAsyncDisposable
 		}
 
 		// 口型同步: 前端回传的播放音量采样直驱原生桌宠嘴型
-		_playback.VolumeSampled += level =>
+		_onPlaybackVolumeSampled = level =>
 		{
 			try
 			{
@@ -252,7 +264,8 @@ public sealed class AppRuntime : IAsyncDisposable
 				/* 桌宠未加载时忽略 */
 			}
 		};
-		_playback.PlayingChanged += playing =>
+		_playback.VolumeSampled += _onPlaybackVolumeSampled;
+		_onPlaybackPlayingChanged = playing =>
 		{
 			try
 			{
@@ -263,9 +276,12 @@ public sealed class AppRuntime : IAsyncDisposable
 				/* 桌宠未加载时忽略 */
 			}
 		};
-		Voice.SpeakingChanged += _ => InvalidateSnapshot("voice");
+		_playback.PlayingChanged += _onPlaybackPlayingChanged;
+		_onVoiceSpeakingChanged = _ => InvalidateSnapshot("voice");
+		Voice.SpeakingChanged += _onVoiceSpeakingChanged;
 
-		Voice.VolumeChanged += volume => _playback.SetDeviceVolume(volume);
+		_onVoiceVolumeChanged = volume => _playback.SetDeviceVolume(volume);
+		Voice.VolumeChanged += _onVoiceVolumeChanged;
 		_playback.SetDeviceVolume(Voice.GetVolume());
 
 		if (!Services.SafeMode)
@@ -1192,6 +1208,42 @@ public sealed class AppRuntime : IAsyncDisposable
 	{
 		if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 		_lifetimeCts.Cancel();
+
+		// 先摘订阅再拆子系统: 关窗与播放停止都会在退出序列里继续触发回调,
+		// 否则它们会打到已经开始释放的运行时上。
+		if (_onWindowVisibilityChanged is not null && Services.Windows is not null)
+			Services.Windows.VisibilityChanged -= _onWindowVisibilityChanged;
+		if (_onExpressionRequested is not null)
+		{
+			Emotion.ExpressionRequested -= _onExpressionRequested;
+			_onExpressionRequested = null;
+		}
+		if (_onProactiveMessage is not null)
+		{
+			Proactive.Message -= _onProactiveMessage;
+			_onProactiveMessage = null;
+		}
+		if (_onPlaybackVolumeSampled is not null)
+		{
+			_playback.VolumeSampled -= _onPlaybackVolumeSampled;
+			_onPlaybackVolumeSampled = null;
+		}
+		if (_onPlaybackPlayingChanged is not null)
+		{
+			_playback.PlayingChanged -= _onPlaybackPlayingChanged;
+			_onPlaybackPlayingChanged = null;
+		}
+		if (_onVoiceSpeakingChanged is not null)
+		{
+			Voice.SpeakingChanged -= _onVoiceSpeakingChanged;
+			_onVoiceSpeakingChanged = null;
+		}
+		if (_onVoiceVolumeChanged is not null)
+		{
+			Voice.VolumeChanged -= _onVoiceVolumeChanged;
+			_onVoiceVolumeChanged = null;
+		}
+
 		if (_petInteractionSubscribed && Services.PetRuntime is not null)
 		{
 			Services.PetRuntime.InteractionTriggered -= OnPetInteractionTriggered;

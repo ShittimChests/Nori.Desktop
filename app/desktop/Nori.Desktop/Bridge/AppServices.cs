@@ -122,6 +122,12 @@ public sealed class AppServices : IAsyncDisposable
 			Telemetry.Dispose();
 			return ValueTask.CompletedTask;
 		});
+		// 日志放最后: 上面每一步都可能还要写日志
+		await DisposeStep(() =>
+		{
+			Logger.Dispose();
+			return ValueTask.CompletedTask;
+		});
 	}
 
 	private static async ValueTask DisposeStep(Func<ValueTask> dispose)

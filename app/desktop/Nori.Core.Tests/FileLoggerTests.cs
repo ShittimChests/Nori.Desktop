@@ -18,6 +18,8 @@ public class FileLoggerTests : IDisposable
 
 	public void Dispose()
 	{
+		// 先释放写入器: FileTarget 是 KeepFileOpen, 不关掉临时目录删不掉
+		_logger.Dispose();
 		try
 		{
 			Directory.Delete(_directory, recursive: true);
@@ -108,5 +110,39 @@ public class FileLoggerTests : IDisposable
 		LogEntry entry = _logger.RecentLogs()[0];
 
 		Assert.Matches(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", entry.Time);
+	}
+
+	[Fact]
+	public void 释放后写入仍然落盘且行格式不变()
+	{
+		_logger.Initialize();
+		_logger.Write(LogSource.Backend, "info", "释放前");
+		string file = Path.Combine(_directory, $"backend_{DateTime.Now:yyyy-MM-dd}.log");
+
+		_logger.Dispose();
+		_logger.Write(LogSource.Backend, "error", "释放后的崩溃");
+
+		// Logger 是退出序列里最后释放的服务, 之后的崩溃日志是唯一的诊断线索, 不能只留内存
+		string content = File.ReadAllText(file);
+		Assert.Contains("释放前", content, StringComparison.Ordinal);
+		Assert.Contains("释放后的崩溃", content, StringComparison.Ordinal);
+		// 同一个文件里不能出现两种排版
+		Assert.All(
+			content.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+			line => Assert.Matches(@"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[(info|error)\] .+$", line.TrimEnd('\r')));
+		// 内存缓冲照旧, 调试页在退出前仍能读到两条
+		Assert.Equal(2, _logger.RecentLogs().Count);
+	}
+
+	[Fact]
+	public void 重复释放不抛异常()
+	{
+		_logger.Initialize();
+		_logger.Dispose();
+
+		_logger.Dispose();
+
+		_logger.Write(LogSource.Backend, "info", "释放两次之后");
+		Assert.Equal("释放两次之后", _logger.RecentLogs()[^1].Message);
 	}
 }

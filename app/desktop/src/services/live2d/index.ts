@@ -157,6 +157,39 @@ export type Live2DController = ReturnType<typeof createLive2D>
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value))
 
+/**
+ * 释放一次预览的全部资源
+ *
+ * model.destroy 必须显式传 texture / baseTexture: 模型在模块加载时就通过
+ * registerTicker 挂到了共享 Ticker 上, 只销毁 Application 既解不开 Ticker 引用,
+ * 也不会释放纹理与 Cubism 内部模型 —— 反复开关模型调整面板会持续堆积 WebGL 纹理。
+ * app.destroy 的 stageOptions 同理: 默认只把子节点摘下来, 不销毁它们。
+ */
+const releaseResources = (
+	app: Application,
+	container: HTMLDivElement,
+	model: Live2DModel<Cubism4InternalModel> | null,
+): void => {
+	// 先销毁模型: destroy 会把自己从 stage 摘除并解除 Ticker 注册, 再销毁 app 才不会重复处理
+	if (model) {
+		try {
+			model.destroy({children: true, texture: true, baseTexture: true})
+		} catch {
+			/* ignore */
+		}
+	}
+	try {
+		app.destroy(true, {children: true, texture: true, baseTexture: true})
+	} catch {
+		/* ignore */
+	}
+	try {
+		container.remove()
+	} catch {
+		/* ignore */
+	}
+}
+
 export const createLive2D = () => {
 	let internal: Live2DInternal | null = null
 	let interactionMaskCache: InteractionMaskCache | null = null
@@ -411,8 +444,12 @@ export const createLive2D = () => {
 		}
 		internal = placeholder
 
+		// 加载失败时也要拿得到模型引用去释放, 不能只活在 try 作用域里
+		let loadedModel: Live2DModel<Cubism4InternalModel> | null = null
+
 		try {
 			const model = new Live2DModel<Cubism4InternalModel>()
+			loadedModel = model
 			const url = `${assetUrl(`live2d/${spec.directory}`)}/${spec.fileBase}.model3.json`
 			await Live2DFactory.setupLive2DModel(model, url, {autoInteract: false})
 
@@ -493,16 +530,7 @@ export const createLive2D = () => {
 			await initExpressionSystem()
 		} catch (error) {
 			console.error("[Live2D] 模型加载失败:", error)
-			try {
-				app.destroy(true)
-			} catch {
-				/* ignore */
-			}
-			try {
-				container.remove()
-			} catch {
-				/* ignore */
-			}
+			releaseResources(app, container, loadedModel)
 			internal = null
 			throw error
 		}
@@ -518,16 +546,8 @@ export const createLive2D = () => {
 		} catch {
 			/* ignore */
 		}
-		try {
-			inner.app.destroy(true)
-		} catch {
-			/* ignore */
-		}
-		try {
-			inner.container.remove()
-		} catch {
-			/* ignore */
-		}
+		// 模型加载中途取消时 inner.model 还是占位的 null, releaseResources 内部已做判空
+		releaseResources(inner.app, inner.container, inner.model)
 	}
 
 	// ===================================================================

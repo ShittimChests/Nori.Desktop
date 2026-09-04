@@ -35,8 +35,13 @@ public sealed class NoriWindow : Window, IBridgeSource
 	private readonly NativeWebView _webView;
 	private readonly NoriBridge _bridge;
 	private bool _ready;
+	/// <summary>窗口已真正销毁; 之后任何投递都直接丢弃, 不碰已释放的 WebView</summary>
+	private bool _closed;
 	private readonly List<string> _pendingScripts = [];
 	private readonly DispatcherTimer _metricsTimer;
+
+	/// <summary>导航迟迟不完成时待发脚本的上限, 超出丢弃最旧的一条</summary>
+	private const int MaxPendingScripts = 256;
 
 	public NoriWindow(WindowDefinition definition, NoriBridge bridge, string url)
 	{
@@ -86,6 +91,26 @@ public sealed class NoriWindow : Window, IBridgeSource
 			if (!_metricsTimer.IsEnabled) _metricsTimer.Start();
 		};
 		ScalingChanged += (_, _) => PostMetrics();
+
+		Closed += OnClosed;
+	}
+
+	/// <summary>
+	/// 真正销毁时的清理
+	///
+	/// first-run / init 会被 WindowManager.Close 真正关掉 (不是隐藏), 所以这里必须
+	/// 停掉合帧定时器 —— 拖动中关窗时它仍处于 enabled, 会被 Dispatcher 的定时器表
+	/// 一直引用着整个窗口 —— 并摘掉 WebView 事件, 之后不再向已释放的 WebView 投递脚本。
+	/// </summary>
+	private void OnClosed(object? sender, EventArgs e)
+	{
+		_closed = true;
+		_ready = false;
+		_metricsTimer.Stop();
+		_webView.EnvironmentRequested -= OnEnvironmentRequested;
+		_webView.WebMessageReceived -= OnWebMessageReceived;
+		_webView.NavigationCompleted -= OnNavigationCompleted;
+		_pendingScripts.Clear();
 	}
 
 	/// <summary>
@@ -137,6 +162,7 @@ public sealed class NoriWindow : Window, IBridgeSource
 	/// </summary>
 	private void Dispatch(string envelopeJson)
 	{
+		if (_closed) return;
 		string script = $"window.__nori&&window.__nori.dispatch({JsonSerializer.Serialize(envelopeJson)})";
 		if (!Dispatcher.UIThread.CheckAccess())
 		{
@@ -146,6 +172,8 @@ public sealed class NoriWindow : Window, IBridgeSource
 		// 导航完成前发的事件先攒着, 否则页面还没定义 __nori
 		if (!_ready)
 		{
+			// 页面一直加载不出来时不能无限堆积, 丢最旧的一条
+			if (_pendingScripts.Count >= MaxPendingScripts) _pendingScripts.RemoveAt(0);
 			_pendingScripts.Add(script);
 			return;
 		}

@@ -55,6 +55,13 @@ let levelTimer: ReturnType<typeof setInterval> | null = null
 let currentToken = ""
 let playbackGeneration = 0
 let rmsBuffer = new Float32Array(1024)
+/**
+ * 当前播放的下载控制器
+ *
+ * 取消播放只把 generation 推进一格, in-flight 的 fetch 仍会把整段音频(最大 32MiB)
+ * 收完才被丢弃; 连续切换语音时这些响应体会一起堆在内存里。这里显式 abort 掉。
+ */
+let fetchAbort: AbortController | null = null
 
 let recorder: MediaRecorder | null = null
 let recorderChunks: Blob[] = []
@@ -121,6 +128,30 @@ const ensureContext = (): AudioContext => {
 	return context
 }
 
+/**
+ * 释放音频图与 AudioContext
+ *
+ * AudioContext 持有系统音频设备句柄, 浏览器对同时存在的实例数有硬上限, 只把
+ * 节点丢掉不 close 的话设备一直被占着。close 是异步的, 但这里不需要等它完成,
+ * 立刻把引用清空即可 —— 下次 ensureContext 会重新建一套。
+ */
+const releaseContext = (): void => {
+	const CURRENT = context
+	context = null
+	try {
+		gain?.disconnect()
+		analyser?.disconnect()
+	} catch {
+		/* ignore */
+	}
+	gain = null
+	analyser = null
+	if (!CURRENT || CURRENT.state === "closed") return
+	void CURRENT.close().catch(() => {
+		/* 已关闭或宿主退出时忽略 */
+	})
+}
+
 /** 当前 RMS 音量 (0~1)。复用固定缓冲，避免每 60ms 分配数组。 */
 const readLevel = (): number => {
 	if (!analyser) return 0
@@ -170,6 +201,8 @@ const cancelPlayback = () => {
 	const TOKEN = currentToken
 	currentToken = ""
 	playbackGeneration += 1
+	fetchAbort?.abort()
+	fetchAbort = null
 	releaseSource(true)
 	if (TOKEN) reportFinalLevel(TOKEN)
 }
@@ -189,18 +222,22 @@ const play = async (payload: PlayPayload): Promise<void> => {
 	cancelPlayback()
 	currentToken = payload.token
 	const GENERATION = playbackGeneration
+	const CONTROLLER = new AbortController()
+	fetchAbort = CONTROLLER
 	try {
 		const CONTEXT = ensureContext()
 		if (CONTEXT.state === "suspended") await CONTEXT.resume()
 		if (!isCurrentPlayback(payload.token, GENERATION)) return
 
-		const RESPONSE = await fetch(payload.url, {cache: "no-store"})
+		const RESPONSE = await fetch(payload.url, {cache: "no-store", signal: CONTROLLER.signal})
 		if (!RESPONSE.ok) throw new Error(`音频下载失败: HTTP ${RESPONSE.status}`)
 		if (Number(RESPONSE.headers.get("content-length") ?? 0) > MAX_AUDIO_BYTES) {
 			throw new Error("音频响应超过 32MiB 限制")
 		}
 		normalizeAudioMime(RESPONSE.headers.get("content-type") || payload.mime)
 		const DATA = await RESPONSE.arrayBuffer()
+		// 下载已收完, 控制器没用了; 只有仍是本次播放时才清, 否则会抹掉后一次的控制器
+		if (fetchAbort === CONTROLLER) fetchAbort = null
 		if (DATA.byteLength === 0) throw new Error("音频响应为空")
 		if (DATA.byteLength > MAX_AUDIO_BYTES) throw new Error("音频响应超过 32MiB 限制")
 		if (!isCurrentPlayback(payload.token, GENERATION)) return
@@ -344,6 +381,7 @@ export const uninstallAudioHost = (): void => {
 	unlisteners = []
 	cancelPlayback()
 	void stopRecording({token: recordToken})
+	releaseContext()
 }
 
 /** 供测试使用的纯函数：由时域样本算 RMS 电平。 */
